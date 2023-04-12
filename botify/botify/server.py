@@ -16,9 +16,9 @@ from botify.recommenders.sticky_artist import StickyArtist
 from botify.recommenders.toppop import TopPop
 from botify.recommenders.indexed import Indexed
 from botify.recommenders.contextual import Contextual
+from botify.recommenders.custom import Custom
 from botify.track import Catalog
-
-import numpy as np
+import redis
 
 root = logging.getLogger()
 root.setLevel("INFO")
@@ -27,12 +27,16 @@ app = Flask(__name__)
 app.config.from_file("config.json", load=json.load)
 api = Api(app)
 
+db = redis.Redis("redis", 6379, 3)
+db.flushall()
+
 # TODO Seminar 6 step 3: Create redis DB with tracks with diverse recommendations
 tracks_redis = Redis(app, config_prefix="REDIS_TRACKS")
 tracks_with_diverse_recs_redis = Redis(app, config_prefix="REDIS_TRACKS_WITH_DIVERSE_RECS")
 artists_redis = Redis(app, config_prefix="REDIS_ARTIST")
 recommendations_redis = Redis(app, config_prefix="REDIS_RECOMMENDATIONS")
 recommendations_ub_redis = Redis(app, config_prefix="REDIS_RECOMMENDATIONS_UB")
+user_data_redis = Redis(app, config_prefix="REDIS_USER_DATA")
 
 data_logger = DataLogger(app)
 
@@ -73,22 +77,17 @@ class NextTrack(Resource):
 
         args = parser.parse_args()
 
-        # TODO Seminar 6 step 6: Wire RECOMMENDERS A/B experiment
-        treatment = Experiments.RECOMMENDERS.assign(user)
+        treatment = Experiments.CUSTOM.assign(user)
         if treatment == Treatment.T1:
-            recommender = StickyArtist(tracks_redis.connection, artists_redis.connection, catalog)
-        elif treatment == Treatment.T2:
-            recommender = TopPop(tracks_redis.connection, catalog.top_tracks[:100])
-        elif treatment == Treatment.T3:
-            recommender = Indexed(tracks_redis.connection, recommendations_ub_redis.connection, catalog)
-        elif treatment == Treatment.T4:
-            recommender = Indexed(tracks_redis.connection, recommendations_redis.connection, catalog)
-        elif treatment == Treatment.T5:
-            recommender = Contextual(tracks_redis.connection, catalog)
-        elif treatment == Treatment.T6:
-            recommender = Contextual(tracks_with_diverse_recs_redis.connection, catalog)
+            recommender = Custom(tracks_redis.connection, catalog.top_tracks[:1000], user_data_redis.connection, catalog,
+                                 memory_listened_track_count=30,
+                                 memory_liked_track_count=30,
+                                 liked_track_memory_threshold=0.9,
+                                 liked_track_frequency=0.2,
+                                 liked_track_threshold=0.3
+                                 )
         else:
-            recommender = Random(tracks_redis.connection)
+            recommender = Contextual(tracks_redis.connection, catalog)
 
         recommendation = recommender.recommend_next(user, args.track, args.time)
 

@@ -2,7 +2,7 @@ import itertools
 import json
 import pickle
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Set
 
 
 @dataclass
@@ -11,6 +11,14 @@ class Track:
     artist: str
     title: str
     recommendations: List[int] = field(default=lambda: [])
+
+
+@dataclass
+class UserData:
+    user: int
+    number_of_tracks: int
+    listened_tracks: Set[int] = field(default=lambda: set())
+    liked_tracks: dict = field(default=lambda: {})
 
 
 class Catalog:
@@ -103,6 +111,41 @@ class Catalog:
                 )
                 j += 1
         self.app.logger.info(f"Uploaded recommendations for {j} users")
+
+    def add_listened_track(self, redis, user, track, max_size=50):
+        data = redis.get(user)
+        if data is None:
+            user_data = UserData(user, 0, set(), {})
+        else:
+            user_data = self.from_bytes(data)
+
+        if len(user_data.listened_tracks) > max_size:
+            user_data.listened_tracks.pop()
+        user_data.number_of_tracks += 1
+        user_data.listened_tracks.add(track)
+        redis.set(user, self.to_bytes(user_data))
+
+    def add_liked_track(self, redis, user, track, score, max_size=3, threshold=0.7):
+        data = redis.get(user)
+        if data is None:
+            user_data = UserData(user, 0, set(), {})
+            user_data.liked_tracks[track] = score
+            redis.set(user, self.to_bytes(user_data))
+        else:
+            user_data = self.from_bytes(data)
+            if len(user_data.liked_tracks) > max_size:
+                less_liked_track = min(user_data.liked_tracks, key=user_data.liked_tracks.get)
+                if user_data.liked_tracks[less_liked_track] <= score:
+                    del user_data.liked_tracks[less_liked_track]
+                    user_data.liked_tracks[track] = score
+            else:
+                if score >= threshold:
+                    user_data.liked_tracks[track] = score
+
+            redis.set(user, self.to_bytes(user_data))
+
+    def reset_user_data(self, redis, user):
+        redis.set(user, self.to_bytes(UserData(user, 0, set(), {})))
 
     def to_bytes(self, instance):
         return pickle.dumps(instance)
